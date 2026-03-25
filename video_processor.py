@@ -1,229 +1,182 @@
-import cv2
 import os
-import subprocess
-import numpy as np
-from pathlib import Path
 import tempfile
+import subprocess
+from pathlib import Path
+import numpy as np
+from moviepy.editor import VideoFileClip, AudioFileClip, CompositeVideoClip, concatenate_videoclips
+from moviepy.video.fx import resize, crop
+from gtts import gTTS
+from PIL import Image, ImageDraw, ImageFont
+import cv2
+import hashlib
+from datetime import datetime
+import json
 
 class VideoProcessor:
-    """Handles video combining, audio sync, and thumbnail generation"""
-    
     def __init__(self):
-        self.supported_formats = ['.mp4', '.avi', '.mov', '.mkv', '.flv']
-    
-    def combine_videos(self, video_paths, output_path, quality="720p"):
-        """
-        Combine multiple video clips into one continuous video
+        self.temp_dir = tempfile.mkdtemp()
         
-        Args:
-            video_paths: List of paths to video files
-            output_path: Path to save combined video
-            quality: Output quality (360p, 480p, 720p, 1080p)
-        """
+    def generate_urdu_voice(self, text, output_path, lang='ur'):
+        """Generate Urdu voice from text using gTTS"""
         try:
-            # Get video properties from first clip
-            cap = cv2.VideoCapture(video_paths[0])
-            fps = int(cap.get(cv2.CAP_PROP_FPS))
-            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            cap.release()
+            # gTTS supports Urdu with 'ur' language code
+            tts = gTTS(text=text, lang=lang, slow=False)
+            tts.save(output_path)
+            return True
+        except Exception as e:
+            print(f"Error generating voice: {e}")
+            return False
+    
+    def combine_videos(self, video_paths, output_path, voice_path=None):
+        """Combine multiple video clips into one video"""
+        try:
+            clips = []
+            target_width = 1920
+            target_height = 1080
             
-            # Adjust resolution based on quality
-            quality_map = {
-                "360p": (640, 360),
-                "480p": (854, 480),
-                "720p": (1280, 720),
-                "1080p": (1920, 1080)
-            }
-            
-            target_size = quality_map.get(quality, (1280, 720))
-            
-            # Create video writer
-            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-            out = cv2.VideoWriter(output_path, fourcc, fps, target_size)
-            
-            # Process each video file
             for video_path in video_paths:
-                cap = cv2.VideoCapture(video_path)
+                clip = VideoFileClip(video_path)
                 
-                while True:
-                    ret, frame = cap.read()
-                    if not ret:
-                        break
-                    
-                    # Resize frame to target size
-                    resized_frame = cv2.resize(frame, target_size)
-                    out.write(resized_frame)
+                # Resize clip to target resolution while maintaining aspect ratio
+                clip_resized = clip.resize(height=target_height)
+                if clip_resized.w < target_width:
+                    # Add black borders if needed
+                    clip_resized = clip_resized.resize(width=target_width)
                 
-                cap.release()
+                # Crop if needed
+                if clip_resized.h > target_height:
+                    clip_resized = clip_resized.crop(y_center=clip_resized.h/2, height=target_height)
+                
+                clips.append(clip_resized)
             
-            out.release()
+            # Concatenate all clips
+            final_video = concatenate_videoclips(clips, method="compose")
+            
+            # Add voice if provided
+            if voice_path and os.path.exists(voice_path):
+                voice_clip = AudioFileClip(voice_path)
+                final_video = final_video.set_audio(voice_clip)
+            
+            # Write final video
+            final_video.write_videofile(
+                output_path,
+                codec='libx264',
+                audio_codec='aac',
+                fps=30,
+                preset='medium',
+                threads=4
+            )
+            
+            # Close all clips
+            for clip in clips:
+                clip.close()
+            final_video.close()
+            if voice_path:
+                voice_clip.close()
+                
             return True
-            
         except Exception as e:
-            print(f"Error combining videos: {str(e)}")
+            print(f"Error combining videos: {e}")
             return False
     
-    def add_audio_to_video(self, video_path, audio_path, output_path):
-        """
-        Add audio track to video using ffmpeg
-        
-        Args:
-            video_path: Path to video file
-            audio_path: Path to audio file
-            output_path: Path to save final video
-        """
+    def generate_thumbnail(self, video_path, output_path, text=None):
+        """Generate thumbnail from video with optional text overlay"""
         try:
-            command = [
-                'ffmpeg',
-                '-i', video_path,
-                '-i', audio_path,
-                '-c:v', 'libx264',
-                '-c:a', 'aac',
-                '-shortest',
-                '-y',
-                output_path
-            ]
-            
-            subprocess.run(command, capture_output=True, check=True)
-            return True
-            
-        except subprocess.CalledProcessError as e:
-            print(f"FFmpeg error: {e.stderr.decode()}")
-            return False
-        except Exception as e:
-            print(f"Error adding audio: {str(e)}")
-            return False
-    
-    def generate_thumbnail(self, video_path, output_path, frame_index=1):
-        """
-        Generate thumbnail from video at specific frame
-        
-        Args:
-            video_path: Path to video file
-            output_path: Path to save thumbnail
-            frame_index: Which second to capture (1 = 1 second in)
-        """
-        try:
+            # Capture frame from video
             cap = cv2.VideoCapture(video_path)
-            fps = int(cap.get(cv2.CAP_PROP_FPS))
-            
-            # Jump to frame
-            cap.set(cv2.CAP_PROP_POS_FRAMES, fps * frame_index)
-            
+            frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            # Get frame at 1/3 of video
+            frame_pos = frame_count // 3
+            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_pos)
             ret, frame = cap.read()
             cap.release()
             
             if ret:
-                # Resize to YouTube thumbnail size (1280x720)
-                frame = cv2.resize(frame, (1280, 720))
+                # Convert BGR to RGB
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                pil_image = Image.fromarray(frame_rgb)
                 
-                # Add text overlay
-                cv2.putText(
-                    frame,
-                    "Video Thumbnail",
-                    (50, 100),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    2,
-                    (255, 255, 255),
-                    3
-                )
+                # Add text overlay if provided
+                if text:
+                    draw = ImageDraw.Draw(pil_image)
+                    
+                    # Try to use a default font
+                    try:
+                        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 60)
+                    except:
+                        font = ImageFont.load_default()
+                    
+                    # Add semi-transparent background for text
+                    text_bbox = draw.textbbox((0, 0), text, font=font)
+                    text_width = text_bbox[2] - text_bbox[0]
+                    text_height = text_bbox[3] - text_bbox[1]
+                    
+                    # Position text at bottom center
+                    x = (pil_image.width - text_width) // 2
+                    y = pil_image.height - text_height - 50
+                    
+                    # Draw background rectangle
+                    draw.rectangle(
+                        [x-20, y-10, x+text_width+20, y+text_height+10],
+                        fill=(0, 0, 0, 128)
+                    )
+                    
+                    # Draw text
+                    draw.text((x, y), text, fill=(255, 255, 255), font=font)
                 
-                # Save as JPEG
-                cv2.imwrite(output_path, frame)
+                # Save thumbnail
+                pil_image.save(output_path, 'JPEG', quality=85)
                 return True
             
             return False
-            
         except Exception as e:
-            print(f"Error generating thumbnail: {str(e)}")
+            print(f"Error generating thumbnail: {e}")
             return False
     
-    def get_video_duration(self, video_path):
-        """
-        Get video duration in seconds
-        
-        Args:
-            video_path: Path to video file
-            
-        Returns:
-            Duration in seconds (float)
-        """
+    def generate_description(self, script_text, video_duration, clip_count):
+        """Generate video description based on script and metadata"""
         try:
-            cap = cv2.VideoCapture(video_path)
-            fps = cap.get(cv2.CAP_PROP_FPS)
-            frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT)
-            cap.release()
-            
-            duration = frame_count / fps
-            return round(duration, 2)
-            
+            # Create a structured description
+            description = f"""🎬 ویڈیو کی تفصیل:
+
+{script_text[:500]}...
+
+📊 ویڈیو کی معلومات:
+• کل دورانیہ: {video_duration:.2f} سیکنڈ
+• کلپس کی تعداد: {clip_count}
+• تاریخ تخلیق: {datetime.now().strftime('%Y-%m-%d')}
+
+✨ خصوصیات:
+• اعلیٰ معیار کی ویڈیو
+• اردو آواز
+• پیشہ ورانہ تدوین
+
+👍 اگر ویڈیو پسند آئے تو لائک اور سبسکرائب کریں!
+
+#video #urdu #content #viral #trending
+"""
+            return description
         except Exception as e:
-            print(f"Error getting duration: {str(e)}")
-            return 0
+            print(f"Error generating description: {e}")
+            return "ویڈیو کی تفصیل دستیاب نہیں ہے۔"
     
-    def resize_video(self, video_path, output_path, width, height):
-        """
-        Resize video to specific dimensions
-        
-        Args:
-            video_path: Input video path
-            output_path: Output video path
-            width: Target width
-            height: Target height
-        """
+    def generate_title(self, script_text):
+        """Generate video title from script content"""
         try:
-            cap = cv2.VideoCapture(video_path)
-            fps = int(cap.get(cv2.CAP_PROP_FPS))
-            
-            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-            out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
-            
-            while True:
-                ret, frame = cap.read()
-                if not ret:
-                    break
-                
-                resized = cv2.resize(frame, (width, height))
-                out.write(resized)
-            
-            cap.release()
-            out.release()
-            return True
-            
+            # Take first few words from script as title
+            words = script_text.split()[:7]
+            title = " ".join(words)
+            if len(title) > 60:
+                title = title[:57] + "..."
+            return title
         except Exception as e:
-            print(f"Error resizing video: {str(e)}")
-            return False
+            print(f"Error generating title: {e}")
+            return "نئی ویڈیو"
     
-    def validate_video(self, video_path):
-        """
-        Validate if video file is readable
-        
-        Args:
-            video_path: Path to video file
-            
-        Returns:
-            (is_valid, duration_seconds)
-        """
+    def cleanup_temp_files(self):
+        """Clean up temporary files"""
         try:
-            cap = cv2.VideoCapture(video_path)
-            
-            if not cap.isOpened():
-                return False, 0
-            
-            fps = cap.get(cv2.CAP_PROP_FPS)
-            frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT)
-            
-            cap.release()
-            
-            duration = frame_count / fps if fps > 0 else 0
-            
-            # Check if at least 5 seconds
-            if duration >= 5:
-                return True, duration
-            
-            return False, duration
-            
-        except Exception as e:
-            print(f"Error validating video: {str(e)}")
-            return False, 0
+            import shutil
+            shutil.rmtree(self.temp_dir)
+        except:
+            pass
