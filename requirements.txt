@@ -10,3 +10,4 @@ ffmpeg-python
 Pillow
 requests
 python-dotenv
+pyttsx3
