@@ -12,3 +12,6 @@ requests
 python-dotenv
 pyttsx3
 gtts
+google-generativeai
+openai
+python-dotenv
