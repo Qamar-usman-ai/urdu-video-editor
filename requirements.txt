@@ -4,6 +4,7 @@ numpy==1.24.4
 scipy==1.11.4
 soundfile==0.12.1
 librosa==0.10.1
+numba==0.57.1
 gtts==2.4.0
 ffmpeg-python==0.2.0
 Pillow==10.0.1
