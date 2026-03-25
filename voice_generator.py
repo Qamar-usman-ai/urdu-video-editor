@@ -1,20 +1,31 @@
-import pyttsx3
+# voice_generator.py
 import soundfile as sf
 import numpy as np
 from scipy import signal
 import os
+import tempfile
 
 class VoiceGenerator:
     """Handles text-to-speech conversion with Urdu support"""
     
     def __init__(self):
         """Initialize text-to-speech engine"""
-        self.engine = pyttsx3.init()
         self.sample_rate = 44100
+        self.use_gtts = True
+        self.available = self._check_availability()
+    
+    def _check_availability(self):
+        """Check if gTTS is available"""
+        try:
+            from gtts import gTTS
+            return True
+        except ImportError:
+            print("Warning: gTTS not installed. Voice generation will be limited.")
+            return False
     
     def generate_voice(self, text, output_path, speed=1.0, pitch=1.0):
         """
-        Generate voice-over from Urdu text
+        Generate voice-over from Urdu text using gTTS
         
         Args:
             text: Urdu text to convert to speech
@@ -26,38 +37,19 @@ class VoiceGenerator:
             bool: Success status
         """
         try:
-            # Configure engine
-            self.engine.setProperty('rate', 150 * speed)  # Words per minute
-            self.engine.setProperty('pitch', pitch)
-            self.engine.setProperty('volume', 1.0)
-            
-            # Set voice to male (index 0 is usually male)
-            voices = self.engine.getProperty('voices')
-            if voices:
-                self.engine.setProperty('voice', voices[0].id)
-            
-            # Save to temporary file first
-            temp_file = output_path + ".tmp.wav"
-            
-            # Generate speech
-            self.engine.save_to_file(text, temp_file)
-            self.engine.runAndWait()
-            
-            # If temp file was created, convert/process it
-            if os.path.exists(temp_file):
-                os.rename(temp_file, output_path)
-                return True
-            else:
-                # Fallback: use gTTS for Urdu
+            # Use gTTS for Urdu text-to-speech
+            if self.use_gtts and self.available:
                 return self._generate_with_gtts(text, output_path, speed)
+            else:
+                return self._generate_fallback(text, output_path)
             
         except Exception as e:
             print(f"Error generating voice: {str(e)}")
-            return self._generate_with_gtts(text, output_path, speed)
+            return False
     
     def _generate_with_gtts(self, text, output_path, speed=1.0):
         """
-        Fallback: Generate voice using Google Text-to-Speech
+        Generate voice using Google Text-to-Speech
         
         Args:
             text: Text to convert
@@ -69,51 +61,71 @@ class VoiceGenerator:
         """
         try:
             from gtts import gTTS
+            import librosa
             
             # Create gTTS object for Urdu
-            tts = gTTS(text=text, lang='ur', slow=(speed < 1.0))
-            tts.save(output_path)
+            slow_mode = (speed < 0.8)  # Use slow mode if speed is below 0.8
+            tts = gTTS(text=text, lang='ur', slow=slow_mode)
             
-            return True
+            # Save to temporary file
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.mp3') as tmp:
+                temp_mp3 = tmp.name
             
-        except ImportError:
-            print("gTTS not available. Using pyttsx3 fallback...")
-            return self._generate_with_pyttsx3(text, output_path, speed)
+            tts.save(temp_mp3)
+            
+            # Convert MP3 to WAV and adjust speed if needed
+            if speed != 1.0:
+                # Load and adjust speed
+                y, sr = librosa.load(temp_mp3, sr=self.sample_rate)
+                y_stretched = librosa.effects.time_stretch(y, rate=speed)
+                sf.write(output_path, y_stretched, sr)
+            else:
+                # Just convert MP3 to WAV
+                y, sr = librosa.load(temp_mp3, sr=self.sample_rate)
+                sf.write(output_path, y, sr)
+            
+            # Clean up temporary file
+            os.unlink(temp_mp3)
+            
+            return os.path.exists(output_path)
+            
+        except ImportError as e:
+            print(f"Required library not installed: {str(e)}")
+            return False
         except Exception as e:
             print(f"Error with gTTS: {str(e)}")
             return False
     
-    def _generate_with_pyttsx3(self, text, output_path, speed=1.0):
+    def _generate_fallback(self, text, output_path):
         """
-        Fallback: Basic pyttsx3 without file save
+        Fallback: Generate a silent audio file with warning message
         
         Args:
-            text: Text to convert
+            text: Text that would have been converted
             output_path: Path to save audio
-            speed: Speech speed
             
         Returns:
             bool: Success status
         """
         try:
-            engine = pyttsx3.init()
-            engine.setProperty('rate', 150 * speed)
-            engine.setProperty('volume', 1.0)
+            # Create a simple beep sound as placeholder
+            duration = len(text) * 0.1  # Rough estimate of speech duration
+            duration = max(1.0, min(duration, 10.0))  # Clamp between 1-10 seconds
             
-            # Get available voices (male voice)
-            voices = engine.getProperty('voices')
-            if voices:
-                engine.setProperty('voice', voices[0].id)
+            # Generate a simple beep pattern
+            t = np.linspace(0, duration, int(self.sample_rate * duration))
+            beep_freq = 440  # A4 note
+            audio = 0.5 * np.sin(2 * np.pi * beep_freq * t)
             
-            # Save to file
-            engine.save_to_file(text, output_path)
-            engine.runAndWait()
-            engine.stop()
+            # Add some silence at start and end
+            silence = np.zeros(int(self.sample_rate * 0.1))
+            audio = np.concatenate([silence, audio, silence])
             
+            sf.write(output_path, audio, self.sample_rate)
             return os.path.exists(output_path)
             
         except Exception as e:
-            print(f"Error with pyttsx3: {str(e)}")
+            print(f"Error generating fallback audio: {str(e)}")
             return False
     
     def adjust_audio_speed(self, audio_path, output_path, speed=1.0):
@@ -172,8 +184,14 @@ class VoiceGenerator:
                 )
             
             elif effect_type == "enhance":
-                # Enhance clarity
-                sos = signal.butter(4, [300, 3000], 'band', fs=sr, output='sos')
+                # Enhance clarity using bandpass filter
+                # Butterworth bandpass filter (300-3000 Hz)
+                nyquist = sr / 2
+                low = 300 / nyquist
+                high = 3000 / nyquist
+                
+                # Filter design
+                sos = signal.butter(4, [low, high], 'band', output='sos')
                 data = signal.sosfilt(sos, data)
                 
                 # Normalize after filtering
@@ -203,7 +221,19 @@ class VoiceGenerator:
             sr = None
             
             for i, audio_file in enumerate(audio_files):
-                data, sr = sf.read(audio_file)
+                if not os.path.exists(audio_file):
+                    print(f"Warning: Audio file not found: {audio_file}")
+                    continue
+                    
+                data, current_sr = sf.read(audio_file)
+                
+                # Set sample rate from first file
+                if sr is None:
+                    sr = current_sr
+                elif sr != current_sr:
+                    # Resample if sample rates don't match
+                    import librosa
+                    data = librosa.resample(data, orig_sr=current_sr, target_sr=sr)
                 
                 if i == 0:
                     combined_audio = data
@@ -211,27 +241,31 @@ class VoiceGenerator:
                     # Calculate crossfade samples
                     fade_samples = int(crossfade * sr)
                     
-                    if fade_samples > 0:
+                    if fade_samples > 0 and len(combined_audio) > fade_samples:
                         # Create crossfade
-                        fade_out = np.linspace(1, 0, fade_samples)
-                        fade_in = np.linspace(0, 1, fade_samples)
+                        fade_out = np.linspace(1, 0, min(fade_samples, len(combined_audio)))
+                        fade_in = np.linspace(0, 1, min(fade_samples, len(data)))
                         
                         # Apply crossfade
-                        combined_audio[-fade_samples:] *= fade_out
-                        data[:fade_samples] *= fade_in
+                        combined_audio[-len(fade_out):] *= fade_out
+                        data[:len(fade_in)] *= fade_in
                         
                         # Merge
+                        min_length = min(len(fade_out), len(fade_in))
+                        merged_part = combined_audio[-min_length:] + data[:min_length]
                         combined_audio = np.concatenate([
-                            combined_audio[:-fade_samples],
-                            combined_audio[-fade_samples:] + data[:fade_samples],
-                            data[fade_samples:]
+                            combined_audio[:-min_length],
+                            merged_part,
+                            data[min_length:]
                         ])
                     else:
                         combined_audio = np.concatenate([combined_audio, data])
             
             # Save merged audio
-            sf.write(output_path, combined_audio, sr)
-            return True
+            if len(combined_audio) > 0 and sr is not None:
+                sf.write(output_path, combined_audio, sr)
+                return True
+            return False
             
         except Exception as e:
             print(f"Error merging audio: {str(e)}")
@@ -248,6 +282,9 @@ class VoiceGenerator:
             (is_valid, duration_seconds)
         """
         try:
+            if not os.path.exists(audio_path):
+                return False, 0
+            
             data, sr = sf.read(audio_path)
             duration = len(data) / sr
             return True, duration
@@ -259,7 +296,9 @@ class VoiceGenerator:
     def get_audio_duration(self, audio_path):
         """Get audio duration in seconds"""
         try:
-            data, sr = sf.read(audio_path)
-            return len(data) / sr
+            if os.path.exists(audio_path):
+                data, sr = sf.read(audio_path)
+                return len(data) / sr
+            return 0
         except:
             return 0
