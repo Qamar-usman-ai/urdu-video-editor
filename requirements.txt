@@ -11,3 +11,4 @@ Pillow
 requests
 python-dotenv
 pyttsx3
+gtts
