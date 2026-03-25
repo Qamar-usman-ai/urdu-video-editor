@@ -5,10 +5,8 @@ import json
 from pathlib import Path
 from datetime import datetime
 import subprocess
-
-from video_processor import VideoProcessor
-from voice_generator import VoiceGenerator
-from metadata_generator import MetadataGenerator
+import cv2
+import numpy as np
 
 # Page configuration
 st.set_page_config(
@@ -49,6 +47,20 @@ if 'processing' not in st.session_state:
     st.session_state.processing = False
 if 'output_data' not in st.session_state:
     st.session_state.output_data = None
+if 'uploaded_videos' not in st.session_state:
+    st.session_state.uploaded_videos = None
+if 'script_input' not in st.session_state:
+    st.session_state.script_input = ""
+if 'video_title' not in st.session_state:
+    st.session_state.video_title = ""
+if 'video_description' not in st.session_state:
+    st.session_state.video_description = ""
+if 'voice_speed' not in st.session_state:
+    st.session_state.voice_speed = 1.0
+if 'video_quality' not in st.session_state:
+    st.session_state.video_quality = "720p"
+if 'video_category' not in st.session_state:
+    st.session_state.video_category = "علوم و تعلیم"
 
 # Main title
 st.title("🎬 Urdu Video Editor Pro")
@@ -84,27 +96,51 @@ with col1:
     
     uploaded_videos = st.file_uploader(
         "Choose video files",
-        type=["mp4", "avi", "mov", "mkv", "flv"],
+        type=["mp4", "avi", "mov", "mkv", "flv", "mpeg4"],
         accept_multiple_files=True,
         key="video_uploader"
     )
     
     if uploaded_videos:
+        st.session_state.uploaded_videos = uploaded_videos
         st.success(f"✅ {len(uploaded_videos)} video(s) uploaded")
+        
+        # Show warning if less than 5 videos
+        if len(uploaded_videos) < 5:
+            st.warning(f"⚠️ You have {len(uploaded_videos)} clip(s). Recommended: 5 or more")
+        
         with st.expander("📊 Video Details"):
             for i, video in enumerate(uploaded_videos):
                 st.write(f"**Video {i+1}:** {video.name} ({video.size / (1024*1024):.2f} MB)")
+    else:
+        st.info("📂 No videos uploaded yet")
 
 with col2:
     st.subheader("📝 Script/Story")
     st.markdown("Write your story in Urdu")
     
+    default_script = """یہ کہانی ہے علی کی۔ ایک عام سے مگر خواب دیکھنے والے لڑکے کی۔ اس کی آنکھوں میں ایک خواب تھا، پاکستان کا CSS آفیسر بننے کا خواب۔
+
+اس نے کوشش کی، رات دن ایک کر دیا۔ لیکن ناکامی، ہر بار ناکامی۔ پہلی بار، دوسری بار، تیسری بار۔ ہر بار وہ گرتا گیا۔
+
+ناکامی نے اس کے اندر کی روشنی بجھا دی۔ وہ تنہا ہوتا چلا گیا، ڈپریشن اس کا مقدر بن گیا۔
+
+آخر اس دن اس نے سب کچھ ختم کرنے کا فیصلہ کر لیا۔ وہ اپنی زندگی کی سب سے بڑی غلطی کرنے ہی والا تھا کہ... ایک ہاتھ نے اس کا کندھا تھاما۔
+
+یہ بزرگ کوئی اور نہیں، ایک اللہ والا تھا۔ اس نے علی کو سمجھایا، اللہ نے تجھے اس لیے بنایا ہے کہ تو کچھ بنے۔
+
+علی نے اپنی سوچ بدل دی۔ اس نے محنت کو اپنا راستہ اور اللہ پر بھروسے کو اپنی طاقت بنا لیا۔
+
+وہ دن آیا۔ علی، وہی لڑکا جو ہار مان چکا تھا، آج پاکستان کا CSS آفیسر تھا۔"""
+    
     script_input = st.text_area(
         "Enter your Urdu script",
         height=250,
+        value=st.session_state.script_input if st.session_state.script_input else default_script,
         placeholder="یہاں اپنی اردو کہانی لکھیں...\n\nExample: میرا نام علی ہے۔ میں ایک فلم بنا رہا ہوں...",
-        key="script_input"
+        key="script_input_area"
     )
+    st.session_state.script_input = script_input
     
     if script_input:
         word_count = len(script_input.split())
@@ -122,24 +158,29 @@ with config_col1:
         "Voice Speed",
         min_value=0.5,
         max_value=2.0,
-        value=1.0,
+        value=st.session_state.voice_speed,
         step=0.1,
-        help="1.0 = Normal, <1.0 = Slower, >1.0 = Faster"
+        help="1.0 = Normal, <1.0 = Slower, >1.0 = Faster",
+        key="voice_speed_slider"
     )
+    st.session_state.voice_speed = voice_speed
 
 with config_col2:
     video_quality = st.selectbox(
         "Video Quality",
         ["360p", "480p", "720p", "1080p"],
         index=2,
-        help="Higher quality = larger file size"
+        help="Higher quality = larger file size",
+        key="video_quality_select"
     )
+    st.session_state.video_quality = video_quality
 
 with config_col3:
     background_music = st.checkbox(
         "Add Background Music",
         value=False,
-        help="Optional background music"
+        help="Optional background music",
+        key="bg_music_checkbox"
     )
 
 st.divider()
@@ -152,36 +193,44 @@ meta_col1, meta_col2 = st.columns(2)
 with meta_col1:
     video_title = st.text_input(
         "Video Title (Urdu/English)",
+        value=st.session_state.video_title if st.session_state.video_title else "ناکامی سے ڈپریشن، خودکشی کی کوشش سے CSS آفیسر تک: ایک کہانی",
         placeholder="مثال: میرا پہلا ویڈیو",
         key="title_input"
     )
+    st.session_state.video_title = video_title
     
     video_category = st.selectbox(
         "Category",
         ["علوم و تعلیم", "تفریح", "خبریں", "ٹیکنالوجی", "دوسرہ"],
+        index=0,
         key="category_select"
     )
+    st.session_state.video_category = video_category
 
 with meta_col2:
+    default_description = """یہ ویڈیو ایک نوجوان کی متاثر کن حقیقی کہانی ہے جو ہر بار ناکام ہوا، ڈپریشن کا شکار ہوا، اور خودکشی کی کوشش تک جا پہنچا۔ لیکن ایک "اللہ والے" بزرگ کی مدد نے اس کی زندگی بدل دی۔
+
+یہ کہانی ہر اس شخص کے لیے ہے جو ناکامی سے مایوس ہے، جو زندگی سے ہار چکا ہے، جو ڈپریشن میں مبتلا ہے۔ یاد رکھیں، ہر ناکامی کامیابی کا ایک قدم ہے۔ بس ہمت نہ ہاریں، محنت جاری رکھیں، اور اللہ پر بھروسہ کریں۔"""
+    
     video_description = st.text_area(
         "Video Description (Urdu/English)",
+        value=st.session_state.video_description if st.session_state.video_description else default_description,
         height=100,
         placeholder="اپنی ویڈیو کی تفصیل لکھیں...",
         key="description_input"
     )
+    st.session_state.video_description = video_description
 
 st.divider()
 
 # Process button
 if st.button("🚀 Start Processing", use_container_width=True, type="primary"):
     # Validation
-    if not uploaded_videos:
+    if not st.session_state.uploaded_videos:
         st.error("❌ Please upload at least one video clip")
-    elif len(uploaded_videos) < 5:
-        st.warning(f"⚠️ You have {len(uploaded_videos)} clip(s). Recommended: 5 or more")
-    elif not script_input:
+    elif not st.session_state.script_input:
         st.error("❌ Please enter your script")
-    elif not video_title:
+    elif not st.session_state.video_title:
         st.error("❌ Please enter a video title")
     else:
         st.session_state.processing = True
@@ -205,11 +254,16 @@ if st.button("🚀 Start Processing", use_container_width=True, type="primary"):
             progress_bar.progress(10)
             
             video_paths = []
-            for i, video_file in enumerate(uploaded_videos):
-                video_path = os.path.join(temp_dir, f"clip_{i}.mp4")
+            for i, video_file in enumerate(st.session_state.uploaded_videos):
+                video_path = os.path.join(temp_dir, f"clip_{i}_{video_file.name}")
                 with open(video_path, "wb") as f:
                     f.write(video_file.read())
                 video_paths.append(video_path)
+            
+            # Import processors
+            from video_processor import VideoProcessor
+            from voice_generator import VoiceGenerator
+            from metadata_generator import MetadataGenerator
             
             # Initialize processors
             video_processor = VideoProcessor()
@@ -220,40 +274,76 @@ if st.button("🚀 Start Processing", use_container_width=True, type="primary"):
             status_text.info("🎬 Combining video clips...")
             progress_bar.progress(25)
             
+            # Get resolution from quality setting
+            resolution_map = {
+                "360p": (480, 360),
+                "480p": (854, 480),
+                "720p": (1280, 720),
+                "1080p": (1920, 1080)
+            }
+            resolution = resolution_map.get(st.session_state.video_quality, (1280, 720))
+            
             combined_video = os.path.join(output_dir, "combined.mp4")
-            video_processor.combine_videos(video_paths, combined_video, video_quality)
+            combined_success = video_processor.combine_videos(video_paths, combined_video, resolution)
+            
+            if not combined_success:
+                raise Exception("Failed to combine videos")
             
             # Step 2: Generate voice
             status_text.info("🎙️ Generating Urdu voice-over...")
             progress_bar.progress(50)
             
             audio_file = os.path.join(output_dir, "voiceover.wav")
-            voice_generator.generate_voice(script_input, audio_file, voice_speed)
+            voice_success = voice_generator.generate_voice(
+                st.session_state.script_input, 
+                audio_file, 
+                st.session_state.voice_speed
+            )
+            
+            if not voice_success:
+                raise Exception("Failed to generate voice-over")
             
             # Step 3: Sync audio with video
             status_text.info("🔊 Syncing audio with video...")
             progress_bar.progress(75)
             
             final_video = os.path.join(output_dir, "final_video.mp4")
-            video_processor.add_audio_to_video(combined_video, audio_file, final_video)
+            audio_success = video_processor.add_audio_to_video(combined_video, audio_file, final_video)
+            
+            if not audio_success:
+                # Fallback: just copy combined video
+                import shutil
+                shutil.copy(combined_video, final_video)
             
             # Step 4: Generate thumbnail
             status_text.info("🖼️ Generating thumbnail...")
             progress_bar.progress(85)
             
             thumbnail = os.path.join(output_dir, "thumbnail.jpg")
-            video_processor.generate_thumbnail(final_video, thumbnail)
+            thumbnail_success = video_processor.generate_thumbnail(final_video, thumbnail)
+            
+            if not thumbnail_success:
+                # Create a simple fallback thumbnail
+                import numpy as np
+                img = np.zeros((720, 1280, 3), dtype=np.uint8)
+                cv2.putText(img, "Video Thumbnail", (100, 360), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 2, (255, 255, 255), 3)
+                cv2.imwrite(thumbnail, img)
             
             # Step 5: Generate metadata
             status_text.info("📝 Generating metadata...")
             progress_bar.progress(95)
             
+            video_duration = video_processor.get_video_duration(final_video)
+            
             metadata = metadata_gen.generate_metadata(
-                title=video_title,
-                description=video_description,
-                category=video_category,
-                video_duration=video_processor.get_video_duration(final_video),
-                script=script_input
+                title=st.session_state.video_title,
+                description=st.session_state.video_description,
+                category=st.session_state.video_category,
+                video_duration=video_duration,
+                script=st.session_state.script_input,
+                voice_speed=st.session_state.voice_speed,
+                video_quality=st.session_state.video_quality
             )
             
             metadata_file = os.path.join(output_dir, "metadata.json")
@@ -269,12 +359,14 @@ if st.button("🚀 Start Processing", use_container_width=True, type="primary"):
                 "thumbnail": thumbnail,
                 "metadata": metadata,
                 "metadata_file": metadata_file,
-                "temp_dir": temp_dir
+                "temp_dir": temp_dir,
+                "video_paths": video_paths,
+                "audio_file": audio_file
             }
             
         except Exception as e:
             st.error(f"❌ Error during processing: {str(e)}")
-            st.write("Debug info:", e)
+            st.exception(e)  # Show full exception for debugging
         finally:
             st.session_state.processing = False
 
@@ -291,20 +383,29 @@ if st.session_state.output_data:
     
     with col1:
         st.markdown("### 🎥 Video Preview")
-        st.video(output["video"])
+        if os.path.exists(output["video"]):
+            st.video(output["video"])
+        else:
+            st.error("Video file not found")
     
     with col2:
         st.markdown("### 🖼️ Thumbnail")
-        st.image(output["thumbnail"], use_column_width=True)
+        if os.path.exists(output["thumbnail"]):
+            st.image(output["thumbnail"], use_container_width=True)
+        else:
+            st.warning("Thumbnail not available")
         
         st.markdown("### 📋 Video Info")
         metadata = output["metadata"]
+        
+        # Display metadata nicely
         st.json({
-            "Title": metadata.get("title"),
-            "Category": metadata.get("category"),
-            "Duration": metadata.get("duration"),
-            "Created": metadata.get("created_at"),
-            "Description": metadata.get("description")
+            "Title": metadata.get("title", "N/A"),
+            "Category": metadata.get("category", "N/A"),
+            "Duration": metadata.get("duration", "N/A"),
+            "Created": metadata.get("created_at", "N/A"),
+            "Voice Speed": metadata.get("voice_speed", "N/A"),
+            "Quality": metadata.get("video_quality", "N/A")
         })
     
     st.divider()
@@ -315,39 +416,46 @@ if st.session_state.output_data:
     download_col1, download_col2, download_col3 = st.columns(3)
     
     with download_col1:
-        with open(output["video"], "rb") as f:
-            st.download_button(
-                label="📹 Download Video",
-                data=f.read(),
-                file_name="final_video.mp4",
-                mime="video/mp4",
-                use_container_width=True
-            )
+        if os.path.exists(output["video"]):
+            with open(output["video"], "rb") as f:
+                st.download_button(
+                    label="📹 Download Video",
+                    data=f.read(),
+                    file_name=f"{st.session_state.video_title.replace(' ', '_')}.mp4",
+                    mime="video/mp4",
+                    use_container_width=True
+                )
     
     with download_col2:
-        with open(output["thumbnail"], "rb") as f:
-            st.download_button(
-                label="🖼️ Download Thumbnail",
-                data=f.read(),
-                file_name="thumbnail.jpg",
-                mime="image/jpeg",
-                use_container_width=True
-            )
+        if os.path.exists(output["thumbnail"]):
+            with open(output["thumbnail"], "rb") as f:
+                st.download_button(
+                    label="🖼️ Download Thumbnail",
+                    data=f.read(),
+                    file_name="thumbnail.jpg",
+                    mime="image/jpeg",
+                    use_container_width=True
+                )
     
     with download_col3:
-        with open(output["metadata_file"], "rb") as f:
-            st.download_button(
-                label="📋 Download Metadata",
-                data=f.read(),
-                file_name="metadata.json",
-                mime="application/json",
-                use_container_width=True
-            )
+        if os.path.exists(output["metadata_file"]):
+            with open(output["metadata_file"], "rb") as f:
+                st.download_button(
+                    label="📋 Download Metadata",
+                    data=f.read(),
+                    file_name="metadata.json",
+                    mime="application/json",
+                    use_container_width=True
+                )
     
     st.divider()
     
     # Clear session button
     if st.button("🔄 Process Another Video", use_container_width=True):
+        # Clean up temp files
+        import shutil
+        if os.path.exists(output["temp_dir"]):
+            shutil.rmtree(output["temp_dir"], ignore_errors=True)
         st.session_state.output_data = None
         st.rerun()
 
