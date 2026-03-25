@@ -1,6 +1,6 @@
 streamlit
-moviepy
 edge-tts
 google-generativeai
 openai
 python-dotenv
+moviepy==1.0.3
