@@ -1,7 +1,6 @@
 import streamlit as st
 import os
 import tempfile
-from pathlib import Path
 import time
 import logging
 from video_processor import VideoProcessor
@@ -15,18 +14,17 @@ logger = logging.getLogger(__name__)
 st.set_page_config(
     page_title="Urdu Video Editor",
     page_icon="🎬",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    layout="wide"
 )
 
-# Custom CSS for better UI
+# Custom CSS
 st.markdown("""
     <style>
     .main-header {
-        font-size: 2.5rem;
+        font-size: 2rem;
         color: #ff4b4b;
         text-align: center;
-        margin-bottom: 2rem;
+        margin-bottom: 1rem;
         font-weight: bold;
     }
     .success-message {
@@ -45,34 +43,26 @@ st.markdown("""
         margin: 1rem 0;
         border: 1px solid #bee5eb;
     }
-    .warning-box {
+    .error-box {
         padding: 1rem;
-        background-color: #fff3cd;
-        color: #856404;
+        background-color: #f8d7da;
+        color: #721c24;
         border-radius: 0.5rem;
         margin: 1rem 0;
-        border: 1px solid #ffeaa7;
-    }
-    .stButton > button {
-        width: 100%;
-        font-size: 1.2rem;
-        font-weight: bold;
     }
     </style>
 """, unsafe_allow_html=True)
 
 def initialize_session_state():
-    """Initialize session state variables"""
-    if 'video_processor' not in st.session_state:
-        st.session_state.video_processor = VideoProcessor()
-    if 'videos_processed' not in st.session_state:
-        st.session_state.videos_processed = False
+    """Initialize session state"""
+    if 'processor' not in st.session_state:
+        st.session_state.processor = VideoProcessor()
     if 'temp_files' not in st.session_state:
         st.session_state.temp_files = []
 
 def cleanup_temp_files():
     """Clean up temporary files"""
-    for temp_file in st.session_state.get('temp_files', []):
+    for temp_file in st.session_state.temp_files:
         try:
             if os.path.exists(temp_file):
                 os.unlink(temp_file)
@@ -83,220 +73,244 @@ def cleanup_temp_files():
 def main():
     initialize_session_state()
     
+    # Header
     st.markdown('<div class="main-header">🎬 پیشہ ورانہ ویڈیو ایڈیٹنگ سسٹم</div>', unsafe_allow_html=True)
+    st.markdown('<div class="info-box">📌 ویڈیوز اپ لوڈ کریں، اردو اسکرپٹ لکھیں، اور مکمل ویڈیو بنائیں</div>', unsafe_allow_html=True)
     
-    st.markdown('<div class="info-box">📌 اس سسٹم میں آپ اپنی ویڈیوز اپ لوڈ کریں، اردو اسکرپٹ لکھیں، اور مکمل ویڈیو بنائیں۔</div>', unsafe_allow_html=True)
-    
-    # Create columns for layout
-    col1, col2 = st.columns([1, 1])
+    # Create two columns
+    col1, col2 = st.columns(2)
     
     with col1:
         st.subheader("📤 ویڈیو کلپس اپ لوڈ کریں")
         uploaded_videos = st.file_uploader(
-            "ایک یا زیادہ ویڈیو کلپس منتخب کریں (MP4, AVI, MOV, MKV)",
-            type=['mp4', 'avi', 'mov', 'mkv', 'MP4', 'AVI', 'MOV', 'MKV'],
+            "ایک یا زیادہ ویڈیو کلپس منتخب کریں",
+            type=['mp4', 'avi', 'mov', 'mkv'],
             accept_multiple_files=True
         )
         
         if uploaded_videos:
-            if len(uploaded_videos) >= 5:
-                st.success(f"✅ {len(uploaded_videos)} ویڈیو کلپس اپ لوڈ ہو گئے")
-            else:
-                st.info(f"📹 {len(uploaded_videos)} ویڈیو کلپس اپ لوڈ ہو گئے۔ مزید بھی شامل کر سکتے ہیں۔")
+            st.success(f"✅ {len(uploaded_videos)} ویڈیو کلپس اپ لوڈ ہو گئے")
             
-            # Display video previews
-            with st.expander("ویڈیوز کی تفصیلات دیکھیں"):
+            # Show video details
+            with st.expander("ویڈیوز کی تفصیلات"):
                 for i, video in enumerate(uploaded_videos, 1):
-                    st.write(f"{i}. {video.name} - {video.size / 1024 / 1024:.2f} MB")
+                    size_mb = video.size / (1024 * 1024)
+                    st.write(f"{i}. {video.name} ({size_mb:.2f} MB)")
     
     with col2:
         st.subheader("📝 ویڈیو اسکرپٹ لکھیں")
         script_text = st.text_area(
-            "اردو میں کہانی یا اسکرپٹ لکھیں",
-            placeholder="مثال: آج ہم آپ کو ایک خوبصورت کہانی سنائیں گے...",
-            height=200,
-            help="یہاں اپنی ویڈیو کا مکمل اسکرپٹ اردو میں لکھیں"
+            "اردو میں اسکرپٹ لکھیں",
+            placeholder="یہاں اپنی کہانی اردو میں لکھیں...",
+            height=300
         )
         
         if script_text:
             word_count = len(script_text.split())
-            st.info(f"📝 اسکرپٹ کے الفاظ: {word_count}")
+            st.info(f"📝 الفاظ کی تعداد: {word_count}")
+            
             if word_count < 10:
-                st.warning("⚠️ براہ کرم کم از کم 10 الفاظ کا اسکرپٹ لکھیں")
+                st.warning("⚠️ براہ کرم کم از کم 10 الفاظ لکھیں")
     
     # Process button
-    process_button = st.button("🎬 ویڈیو بنانا شروع کریں", type="primary", use_container_width=True)
+    process_button = st.button("🎬 ویڈیو بنائیں", type="primary", use_container_width=True)
     
     if process_button:
-        if not uploaded_videos or len(uploaded_videos) < 1:
-            st.error("❌ براہ کرم کم از کم 1 ویڈیو کلپ اپ لوڈ کریں")
-        elif not script_text or len(script_text.strip()) < 10:
-            st.error("❌ براہ کرم کم از کم 10 الفاظ کا اسکرپٹ لکھیں")
-        else:
-            # Create progress tracking
-            progress_placeholder = st.empty()
-            status_placeholder = st.empty()
+        # Validation
+        if not uploaded_videos:
+            st.error("❌ براہ کرم ویڈیوز اپ لوڈ کریں")
+            return
             
-            try:
-                # Step 1: Save uploaded videos
-                status_placeholder.info("📁 ویڈیوز محفوظ کی جا رہی ہیں...")
-                video_paths = []
+        if not script_text or len(script_text.strip()) < 10:
+            st.error("❌ براہ کرم کم از کم 10 الفاظ کا اسکرپٹ لکھیں")
+            return
+        
+        # Progress tracking
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        try:
+            # Step 1: Save videos
+            status_text.info("📁 ویڈیوز محفوظ کی جا رہی ہیں...")
+            video_paths = []
+            
+            for uploaded_video in uploaded_videos:
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.mp4') as tmp_file:
+                    tmp_file.write(uploaded_video.read())
+                    video_paths.append(tmp_file.name)
+                    st.session_state.temp_files.append(tmp_file.name)
+            
+            progress_bar.progress(0.2)
+            status_text.success(f"✅ {len(video_paths)} ویڈیوز محفوظ ہو گئیں")
+            
+            # Step 2: Generate voice
+            status_text.info("🎤 اردو آواز تیار کی جا رہی ہے...")
+            voice_path = os.path.join(st.session_state.processor.temp_dir, "voice.mp3")
+            
+            progress_bar.progress(0.3)
+            voice_success = st.session_state.processor.generate_urdu_voice(script_text, voice_path)
+            
+            if voice_success:
+                progress_bar.progress(0.4)
+                status_text.success("✅ اردو آواز تیار ہو گئی")
+            else:
+                progress_bar.progress(0.4)
+                status_text.warning("⚠️ آواز تیار نہیں ہو سکی، ویڈیو بغیر آواز کے بنے گی")
+                voice_path = None
+            
+            # Step 3: Combine videos
+            status_text.info("🎥 ویڈیوز کو ملایا جا رہا ہے (2-3 منٹ لگ سکتے ہیں)...")
+            output_video_path = os.path.join(st.session_state.processor.temp_dir, "final_video.mp4")
+            
+            progress_bar.progress(0.5)
+            
+            # Show spinner during processing
+            with st.spinner("پروسیسنگ جاری ہے... براہ کرم انتظار کریں"):
+                combine_success = st.session_state.processor.combine_videos(
+                    video_paths, 
+                    output_video_path, 
+                    voice_path
+                )
+            
+            if combine_success:
+                progress_bar.progress(0.7)
+                status_text.success("✅ ویڈیوز کامیابی سے مل گئیں")
                 
-                for uploaded_video in uploaded_videos:
-                    with tempfile.NamedTemporaryFile(delete=False, suffix='.mp4') as tmp_file:
-                        tmp_file.write(uploaded_video.read())
-                        video_paths.append(tmp_file.name)
-                        st.session_state.temp_files.append(tmp_file.name)
+                # Step 4: Generate thumbnail
+                status_text.info("🖼️ تھمب نیل تیار کیا جا رہا ہے...")
+                thumbnail_path = os.path.join(st.session_state.processor.temp_dir, "thumbnail.jpg")
+                title = st.session_state.processor.generate_title(script_text)
                 
-                progress_placeholder.progress(0.2)
-                status_placeholder.success(f"✅ {len(video_paths)} ویڈیوز محفوظ ہو گئیں")
+                progress_bar.progress(0.8)
+                thumb_success = st.session_state.processor.generate_thumbnail(
+                    output_video_path, 
+                    thumbnail_path, 
+                    title
+                )
                 
-                # Step 2: Generate voice
-                status_placeholder.info("🎤 اردو آواز تیار کی جا رہی ہے...")
-                voice_path = os.path.join(st.session_state.video_processor.temp_dir, "voice.mp3")
-                
-                if st.session_state.video_processor.generate_urdu_voice(script_text, voice_path):
-                    progress_placeholder.progress(0.4)
-                    status_placeholder.success("✅ اردو آواز تیار ہو گئی")
+                if thumb_success:
+                    progress_bar.progress(0.9)
+                    status_text.success("✅ تھمب نیل تیار ہو گیا")
                 else:
-                    progress_placeholder.progress(0.4)
-                    status_placeholder.warning("⚠️ آواز تیار کرنے میں مسئلہ، ویڈیو بغیر آواز کے بنے گی")
-                    voice_path = None
+                    progress_bar.progress(0.9)
+                    status_text.warning("⚠️ تھمب نیل تیار نہیں ہو سکا")
+                    thumbnail_path = None
                 
-                # Step 3: Combine videos
-                status_placeholder.info("🎥 ویڈیوز کو ملایا جا رہا ہے (اس میں کچھ وقت لگ سکتا ہے)...")
-                output_video_path = os.path.join(st.session_state.video_processor.temp_dir, "final_video.mp4")
+                # Get video duration
+                duration = st.session_state.processor.get_video_duration(output_video_path)
                 
-                if st.session_state.video_processor.combine_videos(video_paths, output_video_path, voice_path):
-                    progress_placeholder.progress(0.7)
-                    status_placeholder.success("✅ ویڈیوز کامیابی سے مل گئیں")
+                # Generate description
+                description = st.session_state.processor.generate_description(
+                    script_text, 
+                    duration, 
+                    len(video_paths)
+                )
+                
+                progress_bar.progress(1.0)
+                status_text.success("✅ ویڈیو کامیابی سے تیار ہو گئی!")
+                
+                # Display results
+                st.markdown('<div class="success-message">🎉 مبارک ہو! آپ کی ویڈیو تیار ہے۔</div>', unsafe_allow_html=True)
+                
+                # Create tabs for results
+                tab1, tab2, tab3 = st.tabs(["🎥 ویڈیو", "🖼️ تھمب نیل", "📝 معلومات"])
+                
+                with tab1:
+                    st.subheader("تیار شدہ ویڈیو")
                     
-                    # Step 4: Generate thumbnail
-                    status_placeholder.info("🖼️ تھمب نیل تیار کیا جا رہا ہے...")
-                    thumbnail_path = os.path.join(st.session_state.video_processor.temp_dir, "thumbnail.jpg")
-                    title = st.session_state.video_processor.generate_title(script_text)
+                    # Read and display video
+                    with open(output_video_path, 'rb') as f:
+                        video_bytes = f.read()
+                        st.video(video_bytes)
                     
-                    if st.session_state.video_processor.generate_thumbnail(output_video_path, thumbnail_path, title):
-                        progress_placeholder.progress(0.9)
-                        status_placeholder.success("✅ تھمب نیل تیار ہو گیا")
-                    else:
-                        progress_placeholder.progress(0.9)
-                        status_placeholder.warning("⚠️ تھمب نیل تیار نہیں ہو سکا")
-                        thumbnail_path = None
-                    
-                    # Get video duration
-                    duration = st.session_state.video_processor.get_video_duration(output_video_path)
-                    
-                    # Generate metadata
-                    description = st.session_state.video_processor.generate_description(script_text, duration, len(video_paths))
-                    
-                    progress_placeholder.progress(1.0)
-                    status_placeholder.success("✅ ویڈیو کامیابی سے تیار ہو گئی!")
-                    
-                    # Display results
-                    st.markdown('<div class="success-message">🎉 مبارک ہو! آپ کی ویڈیو تیار ہے۔</div>', unsafe_allow_html=True)
-                    
-                    # Create tabs for results
-                    tab1, tab2, tab3 = st.tabs(["🎥 ویڈیو", "🖼️ تھمب نیل", "📝 معلومات"])
-                    
-                    with tab1:
-                        st.subheader("تیار شدہ ویڈیو")
-                        with open(output_video_path, 'rb') as video_file:
-                            video_bytes = video_file.read()
-                            st.video(video_bytes)
-                        
-                        # Download button
-                        with open(output_video_path, 'rb') as f:
-                            st.download_button(
-                                label="📥 ویڈیو ڈاؤن لوڈ کریں",
-                                data=f,
-                                file_name=f"final_video_{int(time.time())}.mp4",
-                                mime="video/mp4",
-                                use_container_width=True
-                            )
-                    
-                    with tab2:
-                        if thumbnail_path and os.path.exists(thumbnail_path):
-                            st.subheader("تھمب نیل")
-                            with open(thumbnail_path, 'rb') as thumb_file:
-                                thumb_bytes = thumb_file.read()
-                                st.image(thumb_bytes, use_container_width=True)
-                            
-                            with open(thumbnail_path, 'rb') as f:
-                                st.download_button(
-                                    label="🖼️ تھمب نیل ڈاؤن لوڈ کریں",
-                                    data=f,
-                                    file_name=f"thumbnail_{int(time.time())}.jpg",
-                                    mime="image/jpeg",
-                                    use_container_width=True
-                                )
-                        else:
-                            st.warning("تھمب نیل دستیاب نہیں ہے")
-                    
-                    with tab3:
-                        st.subheader("📌 ویڈیو ٹائٹل")
-                        st.markdown(f"### {title}")
-                        
-                        st.subheader("📝 ویڈیو تفصیل")
-                        st.markdown(description)
-                        
-                        # Download description
+                    # Download button
+                    with open(output_video_path, 'rb') as f:
                         st.download_button(
-                            label="📄 تفصیل ڈاؤن لوڈ کریں",
-                            data=description,
-                            file_name=f"description_{int(time.time())}.txt",
-                            mime="text/plain",
+                            label="📥 ویڈیو ڈاؤن لوڈ کریں",
+                            data=f,
+                            file_name=f"video_{int(time.time())}.mp4",
+                            mime="video/mp4",
                             use_container_width=True
                         )
+                
+                with tab2:
+                    if thumbnail_path and os.path.exists(thumbnail_path):
+                        st.subheader("تھمب نیل")
+                        
+                        with open(thumbnail_path, 'rb') as f:
+                            thumb_bytes = f.read()
+                            st.image(thumb_bytes, use_container_width=True)
+                        
+                        with open(thumbnail_path, 'rb') as f:
+                            st.download_button(
+                                label="🖼️ تھمب نیل ڈاؤن لوڈ کریں",
+                                data=f,
+                                file_name=f"thumbnail_{int(time.time())}.jpg",
+                                mime="image/jpeg",
+                                use_container_width=True
+                            )
+                    else:
+                        st.warning("تھمب نیل دستیاب نہیں ہے")
+                
+                with tab3:
+                    st.subheader("📌 ویڈیو ٹائٹل")
+                    st.markdown(f"### {title}")
                     
-                    st.balloons()
+                    st.subheader("📝 ویڈیو تفصیل")
+                    st.markdown(description)
                     
-                else:
-                    status_placeholder.error("❌ ویڈیوز کو ملانے میں خرابی ہوئی")
-                    
-            except Exception as e:
-                logger.error(f"Error in main process: {traceback.format_exc()}")
-                st.error(f"❌ ایک خرابی پیش آ گئی: {str(e)}")
-                st.info("براہ کرم دوبارہ کوشش کریں یا اپنے ویڈیوز کا سائز کم کریں")
-            
-            finally:
-                # Clean up temporary files
-                cleanup_temp_files()
+                    st.download_button(
+                        label="📄 تفصیل ڈاؤن لوڈ کریں",
+                        data=description,
+                        file_name=f"description_{int(time.time())}.txt",
+                        mime="text/plain",
+                        use_container_width=True
+                    )
+                
+                # Show success animation
+                st.balloons()
+                
+            else:
+                st.markdown('<div class="error-box">❌ ویڈیوز کو ملانے میں خرابی ہوئی۔ براہ کرم دوبارہ کوشش کریں</div>', unsafe_allow_html=True)
+                st.info("💡 تجاویز:\n- ویڈیوز کا فارمیٹ MP4 ہو\n- ویڈیوز کا سائز کم کریں\n- کم ویڈیوز کے ساتھ آزمائیں")
+                
+        except Exception as e:
+            logger.error(f"Error: {traceback.format_exc()}")
+            st.markdown(f'<div class="error-box">❌ خرابی: {str(e)}</div>', unsafe_allow_html=True)
+            st.info("براہ کرم دوبارہ کوشش کریں")
+        
+        finally:
+            # Clean up temporary files
+            cleanup_temp_files()
     
-    # Sidebar information
+    # Sidebar
     with st.sidebar:
         st.markdown("## 📋 معلومات")
         st.markdown("""
-        ### کیسے استعمال کریں:
-        1. **ویڈیو کلپس اپ لوڈ کریں** - کم از کم 1 ویڈیو کلپ
-        2. **اسکرپٹ لکھیں** - اردو میں کہانی یا اسکرپٹ
+        ### استعمال کرنے کا طریقہ:
+        1. **ویڈیوز اپ لوڈ کریں** - کم از کم 1 ویڈیو
+        2. **اسکرپٹ لکھیں** - اردو میں
         3. **ویڈیو بنائیں** - بٹن دبائیں
         
         ### خصوصیات:
         - ✅ اردو آواز
-        - ✅ ویڈیوز کو ملانا
-        - ✅ آٹو تھمب نیل
-        - ✅ آٹو ٹائٹل اور تفصیل
-        - ✅ ڈاؤن لوڈ آپشن
+        - ✅ ویڈیوز ملانا
+        - ✅ تھمب نیل بنانا
+        - ✅ ٹائٹل اور تفصیل
         
         ### سپورٹڈ فارمیٹس:
         - MP4, AVI, MOV, MKV
         - زیادہ سے زیادہ 10 ویڈیوز
-        - ہر ویڈیو کا زیادہ سے زیادہ سائز: 200MB
-        
-        ### نوٹ:
-        - پہلی بار پروسیسنگ میں وقت لگ سکتا ہے
-        - انٹرنیٹ کنیکشن ضروری ہے
-        - اسکرپٹ صرف اردو میں لکھیں
+        - ہر ویڈیو 200MB تک
         """)
         
         st.markdown("---")
         st.markdown("**🎬 ورژن:** 2.0")
-        st.markdown("**👨‍💻 تیار کردہ:** AI Video Editor")
         
-        # Add a clear cache button
+        # Clear cache button
         if st.button("🗑️ کیش صاف کریں"):
             cleanup_temp_files()
+            st.session_state.processor.cleanup_temp_files()
             st.success("کیش صاف ہو گیا")
 
 if __name__ == "__main__":
