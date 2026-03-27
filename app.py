@@ -5,95 +5,125 @@ import edge_tts
 import math
 from moviepy.editor import VideoFileClip, concatenate_videoclips, AudioFileClip, vfx, CompositeAudioClip
 import google.generativeai as genai
-from openai import OpenAI
 
-# --- Setup ---
+# --- Setup Directories ---
 TEMP_DIR = "temp_output"
 if not os.path.exists(TEMP_DIR):
     os.makedirs(TEMP_DIR)
+
+# --- Helper Functions ---
 
 def split_text(text, n):
     """Splits the Urdu script into 'n' equal parts to match the number of clips."""
     words = text.split()
     total_words = len(words)
+    if total_words == 0: return [""] * n
     size = math.ceil(total_words / n)
     return [" ".join(words[i:i + size]) for i in range(0, total_words, size)]
 
 async def generate_voice_segment(text, path):
-    """Generates the highest quality Male Urdu voice (Asad)."""
-    # We use a slightly slower rate (-5%) for better clarity in storytelling
-    communicate = edge_tts.Communicate(text, "ur-PK-AsadNeural", rate="-5%")
+    """Generates a high-energy, motivational Urdu voice (Asad)."""
+    # volume="+50%" and pitch="+10Hz" makes the voice sound stronger and more professional
+    communicate = edge_tts.Communicate(
+        text, 
+        "ur-PK-AsadNeural", 
+        rate="-5%", 
+        volume="+50%", 
+        pitch="+10Hz"
+    )
     await communicate.save(path)
 
 def create_synced_video(video_paths, script, output_path):
-    """Matches each clip to a specific part of the script for perfect timing."""
+    """Matches each clip to a specific part of the script with background music mixing."""
     num_clips = len(video_paths)
     script_parts = split_text(script, num_clips)
     
     final_segments = []
     
     for i in range(num_clips):
-        st.write(f"Syncing Segment {i+1}...")
+        st.write(f"🔄 Processing Segment {i+1} of {num_clips}...")
         
-        # 1. Generate audio for this specific part of the story
+        # 1. Generate High-Energy AI Voice for this segment
         seg_audio_path = os.path.join(TEMP_DIR, f"audio_{i}.mp3")
         asyncio.run(generate_voice_segment(script_parts[i], seg_audio_path))
-        seg_audio = AudioFileClip(seg_audio_path)
+        ai_voice = AudioFileClip(seg_audio_path).volumex(1.4) # Boost voice volume
         
-        # 2. Load the clip and calculate the speed factor
+        # 2. Load the clip and calculate the speed factor to match audio length
         clip = VideoFileClip(video_paths[i])
-        # Speed = Original Duration / Target Duration
-        speed_factor = clip.duration / seg_audio.duration
+        # Speed = Original Duration / Target (Audio) Duration
+        speed_factor = clip.duration / ai_voice.duration
         
-        # 3. Stretch/Slow the clip and attach its specific audio
-        synced_clip = clip.fx(vfx.speedx, speed_factor).set_audio(seg_audio)
+        # 3. Stretch/Slow the clip visually
+        synced_clip = clip.fx(vfx.speedx, speed_factor)
+        
+        # 4. AUDIO MIXING: Keep original clip music but lower it (Ducking)
+        if synced_clip.audio is not None:
+            # Lower original music to 20% so the AI voice is the hero
+            background_music = synced_clip.audio.volumex(0.2) 
+            combined_audio = CompositeAudioClip([background_music, ai_voice])
+        else:
+            # If the clip has no sound, just use the AI voice
+            combined_audio = ai_voice
+            
+        # 5. Attach the mixed audio to the synced clip
+        synced_clip = synced_clip.set_audio(combined_audio).set_duration(ai_voice.duration)
         final_segments.append(synced_clip)
 
-    # 4. Concatenate all perfectly synced segments
+    # 6. Final Assembly
+    st.write("🎬 Finalizing Video Render...")
     final_video = concatenate_videoclips(final_segments, method="compose")
     final_video.write_videofile(output_path, fps=24, codec="libx264", audio_codec="aac")
     
-    # Cleanup
+    # Cleanup memory
     for c in final_segments: c.close()
 
 # --- Streamlit Interface ---
-st.set_page_config(page_title="Pro Urdu Video Sync", layout="wide")
-st.title("🎬 Pro Urdu Video Sync")
-st.markdown("Each clip you upload will now match a specific part of your Urdu story.")
+st.set_page_config(page_title="Failure to Success | AI Video Factory", layout="wide")
+st.title("🚀 Failure to Success: AI Video Factory")
+st.markdown("Automate your Urdu storytelling by syncing professional AI voiceovers with your video clips.")
 
 with st.sidebar:
-    st.header("AI Config")
-    ai_model = st.selectbox("Metadata AI", ["Gemini 3 Flash", "Grok (xAI)"])
-    gem_key = st.text_input("Gemini Key", type="password")
-    gro_key = st.text_input("Grok Key", type="password")
+    st.header("⚙️ Configuration")
+    st.info("Ensure your clips have high-quality background music; this tool will automatically mix it with the AI voice.")
+    if st.button("🧹 Clear Temp Files"):
+        for f in os.listdir(TEMP_DIR):
+            os.remove(os.path.join(TEMP_DIR, f))
+        st.success("Cleared!")
 
 col1, col2 = st.columns(2)
 
 with col1:
-    files = st.file_uploader("Upload 5-6 Clips (Order matters!)", type=["mp4", "mov"], accept_multiple_files=True)
+    st.subheader("1. Upload Your Visuals")
+    files = st.file_uploader("Upload 4-6 Clips (In Order)", type=["mp4", "mov"], accept_multiple_files=True)
     
 with col2:
-    story_input = st.text_area("Paste Full Urdu Story:", height=300)
+    st.subheader("2. Your Motivational Script")
+    story_input = st.text_area("Paste your Urdu story here:", height=300, placeholder="مثال کے طور پر: ایلون مسک کی زندگی میں ایک وقت ایسا بھی آیا...")
 
-if st.button("🚀 Generate Synced Video"):
+if st.button("🔥 Generate Final Video"):
     if not files or not story_input:
-        st.error("Please provide both clips and script.")
+        st.error("Missing Files or Script! Please provide both to continue.")
     else:
-        with st.status("Processing Segments...") as status:
-            # Save Raw Clips
-            paths = []
-            for i, f in enumerate(files):
-                p = os.path.join(TEMP_DIR, f"raw_{i}.mp4")
-                with open(p, "wb") as out: out.write(f.getbuffer())
-                paths.append(p)
-            
-            # Start Segmented Syncing
-            out_v = os.path.join(TEMP_DIR, "synced_final.mp4")
-            create_synced_video(paths, story_input, out_v)
-            
-            status.update(label="Video Synced Successfully!", state="complete")
+        try:
+            with st.status("🛠️ Building your masterpiece...") as status:
+                # Save Raw Clips to Temp Folder
+                paths = []
+                for i, f in enumerate(files):
+                    p = os.path.join(TEMP_DIR, f"raw_{i}.mp4")
+                    with open(p, "wb") as out: 
+                        out.write(f.getbuffer())
+                    paths.append(p)
+                
+                # Run the Video Creation Engine
+                out_v = os.path.join(TEMP_DIR, "final_production.mp4")
+                create_synced_video(paths, story_input, out_v)
+                
+                status.update(label="✅ Video Ready for Download!", state="complete")
 
-        st.divider()
-        st.video(out_v)
-        with open(out_v, "rb") as f:
-            st.download_button("Download Synced Video", f, "final_urdu_story.mp4")
+            st.divider()
+            st.video(out_v)
+            with open(out_v, "rb") as f:
+                st.download_button("📥 Download MP4 Video", f, "Failure_to_Success_Video.mp4")
+        
+        except Exception as e:
+            st.error(f"An error occurred: {e}")
